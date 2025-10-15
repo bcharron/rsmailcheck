@@ -139,9 +139,9 @@ async fn parse_file(path: &Path) -> Result<MailInfo> {
     let mut subject = None;
     let mut from = None;
     
-    while let Some(&line) = lines.peek() {
+    while let Some(line) = lines.next() {
         if line.starts_with("Subject:") {
-            subject_lines.push(lines.next().unwrap());
+            subject_lines.push(&line);
             
             while let Some(&next_line) = lines.peek() {
                 if next_line.starts_with(" ") {
@@ -157,12 +157,10 @@ async fn parse_file(path: &Path) -> Result<MailInfo> {
                 Err(e) => Some(e.to_string()),
             };
         } else if line.starts_with("From:") {
-            from = match parse_header(lines.next().unwrap().trim_start_matches("From:")) {
+            from = match parse_header(line.trim_start_matches("From:")) {
                 Ok(s) => Some(s),
                 Err(e) => Some(e.to_string()),
             };
-        } else {
-            lines.next();
         }
     }
     
