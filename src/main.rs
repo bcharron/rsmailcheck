@@ -6,6 +6,9 @@ use encoding_rs::Encoding;
 use encoding_rs::WINDOWS_1252;
 use quoted_printable::ParseMode;
 use regex::{Regex, Captures};
+use tokio::fs::File;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use std::collections::HashMap;
 use std::{fs};
 use std::path::{Path, PathBuf};
@@ -131,6 +134,18 @@ struct MailInfo {
     subject: Option<String>,
 }
 
+async fn parse_file_2(path: &Path) -> Result<MailInfo> {
+    let f = File::open(path).await;
+    
+    if let Ok(file) = f {
+        let mut reader = BufReader::new(file);
+        let mut buf = String::with_capacity(1024);
+        let r = reader.read_line(&mut buf).await;
+    }
+
+    return Ok(MailInfo { from: None, subject: None });
+}
+
 async fn parse_file(path: &Path) -> Result<MailInfo> {
     let contents = fs::read_to_string(path)?;
 
@@ -161,6 +176,11 @@ async fn parse_file(path: &Path) -> Result<MailInfo> {
                 Ok(s) => Some(s),
                 Err(e) => Some(e.to_string()),
             };
+        }
+
+        // We're done, stop reading.
+        if from.is_some() && subject.is_some() {
+            break;
         }
     }
     
