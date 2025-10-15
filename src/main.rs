@@ -1,10 +1,12 @@
 use anyhow::{Result, Context, anyhow};
 use base64::prelude::*;
 use clap::Parser;
+use colored::*;
 use encoding_rs::Encoding;
 use encoding_rs::WINDOWS_1252;
 use quoted_printable::ParseMode;
 use regex::{Regex, Captures};
+use std::collections::HashMap;
 use std::{fs};
 use std::path::{Path, PathBuf};
 use tokio;
@@ -177,17 +179,72 @@ struct Args {
     #[arg(short, long, default_value = "magenta")]
     mailbox_color: String,
 
-    /// Number of times to greet
+    /// Color of subject line
     #[arg(short, long, default_value = "light cyan")]
     subject_color: String,
+
+    /// List available colors
+    #[arg(short, long)]
+    list_colors: bool,
 
     /// maildir directories
     inputs: Vec<String>,
 }
 
+use colored::Color;
+
+fn color_map() -> HashMap<&'static str, Color> {
+    use Color::*;
+    [
+        ("black", Black),
+        ("blue", Blue),
+        ("bright_black", BrightBlack),
+        ("bright_blue", BrightBlue),
+        ("bright_cyan", BrightCyan),
+        ("bright_green", BrightGreen),
+        ("bright_magenta", BrightMagenta),
+        ("bright_red", BrightRed),
+        ("bright_white", BrightWhite),
+        ("bright_yellow", BrightYellow),
+        ("cyan", Cyan),
+        ("green", Green),
+        ("magenta", Magenta),
+        ("red", Red),
+        ("white", White),
+        ("yellow", Yellow),
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn parse_color(name: &str) -> Option<Color> {
+    color_map().get(&name.to_lowercase().as_str()).copied()
+}
+
+fn list_colors() {
+    let map = color_map();
+    let keys = map.keys().map(|k| k.to_string());
+    let mut colors: Vec<String> = keys.collect();
+
+    colors.sort();
+
+    for name in colors {
+        println!("  {}", name);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    if args.list_colors {
+        list_colors();
+
+        return ()
+    }
+
+    let mailbox_color = parse_color(&args.mailbox_color).unwrap_or(Color::Magenta);
+    let subject_color = parse_color(&args.subject_color).unwrap_or(Color::BrightCyan);
 
     let mut handles = Vec::new();
     let mut paths = Vec::new();
@@ -222,7 +279,7 @@ async fn main() {
                     let content = parse_file(&file).await;
 
                     return match content {
-                        Ok(s) => format!("{}: {}", basename, s),
+                        Ok(s) => format!("{}: {}", basename.color(mailbox_color), s.color(subject_color)),
                         Err(_) => format!("{}: <No subject>", basename),
                    };
                 });
