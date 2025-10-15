@@ -100,12 +100,10 @@ fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<St
     }
 }
 
-fn parse_subject(line: &str) -> Result<String> {
-    let subject = line.trim_start_matches("Subject:");
-
+fn parse_header(header: &str) -> Result<String> {
     let re = Regex::new(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=")?;
 
-    let output = re.replace_all(subject.trim_start(), |caps: &Captures| {
+    let output = re.replace_all(header.trim_start(), |caps: &Captures| {
         let (Some(charset), Some(encoding), Some(encoded_text)) = (
             caps.get(1).map(|m| m.as_str()),
             caps.get(2).map(|m| m.as_str()),
@@ -127,30 +125,53 @@ fn parse_subject(line: &str) -> Result<String> {
     return Ok(output.into_owned());
 }
 
-async fn parse_file(path: &Path) -> Result<String> {
+#[derive(Debug)]
+struct MailInfo {
+    from: Option<String>,
+    subject: Option<String>,
+}
+
+async fn parse_file(path: &Path) -> Result<MailInfo> {
     let contents = fs::read_to_string(path)?;
 
     let mut subject_lines: Vec<&str> = Vec::new();
-    let mut lines = contents.lines();
-
-    while let Some(line) = lines.next() {
+    let mut lines = contents.lines().peekable();
+    let mut subject = None;
+    let mut from = None;
+    
+    while let Some(&line) = lines.peek() {
         if line.starts_with("Subject:") {
-            subject_lines.push(line);
-
-            for more in lines.by_ref() {
-                if more.starts_with(" ") {
-                    subject_lines.push(more);
+            subject_lines.push(lines.next().unwrap());
+            
+            while let Some(&next_line) = lines.peek() {
+                if next_line.starts_with(" ") {
+                    subject_lines.push(lines.next().unwrap());
                 } else {
                     break;
                 }
             }
-
+            
             let s = subject_lines.concat();
-            return parse_subject(s.as_str());
+            subject = match parse_header(s.trim_start_matches("Subject:")) {
+                Ok(s) => Some(s),
+                Err(e) => Some(e.to_string()),
+            };
+        } else if line.starts_with("From:") {
+            from = match parse_header(lines.next().unwrap().trim_start_matches("From:")) {
+                Ok(s) => Some(s),
+                Err(e) => Some(e.to_string()),
+            };
+        } else {
+            lines.next();
         }
     }
+    
+    return Ok(MailInfo {
+        from,
+        subject,
+    });
 
-    return Err(anyhow!("No Subject line in {:?}", path));
+    // return Err(anyhow!("No Subject line in {:?}", path));
 }
 
 fn find_files(path: &PathBuf) -> Vec<PathBuf> {
@@ -245,6 +266,7 @@ async fn main() {
 
     let mailbox_color = parse_color(&args.mailbox_color).unwrap_or(Color::Magenta);
     let subject_color = parse_color(&args.subject_color).unwrap_or(Color::BrightCyan);
+    let from_color = parse_color(&args.from_color).unwrap_or(Color::Cyan);
 
     let mut handles = Vec::new();
     let mut paths = Vec::new();
@@ -270,21 +292,27 @@ async fn main() {
             .and_then(|p| p.to_str())
             .unwrap_or_else(|| path.to_str().unwrap());
 
-            let files = find_files(&path);
+        let files = find_files(&path);
     
         for file in files {
-                let file = file.clone();
-                let basename = basename.to_string();
-                let handle = tokio::spawn(async move {
-                    let content = parse_file(&file).await;
+            let file = file.clone();
+            let basename = basename.to_string();
+            let handle = tokio::spawn(async move {
+                let content = parse_file(&file).await;
 
-                    return match content {
-                        Ok(s) => format!("{}: {}", basename.color(mailbox_color), s.color(subject_color)),
-                        Err(_) => format!("{}: <No subject>", basename),
-                   };
-                });
-    
-                handles.push(handle);
+                return match content {
+                    Ok(m) => {
+                        let mailbox = basename.color(mailbox_color);
+                        let from = m.from.unwrap_or("no from".to_string()).color(from_color);
+                        let subject = m.subject.unwrap_or("no subject".to_string()).color(subject_color);
+
+                        format!("{}: {} / {}", mailbox, from, subject)
+                    },
+                    Err(e) => format!("{}: <No subject> ({})", basename, e),
+                };
+            });
+
+            handles.push(handle);
         }
     }
 
