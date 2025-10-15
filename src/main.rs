@@ -1,12 +1,13 @@
-use std::{env, fs};
-use std::path::PathBuf;
-use tokio;
-use base64::prelude::*;
 use anyhow::{Result, Context, anyhow};
-use regex::{Regex, Captures};
-use quoted_printable::ParseMode;
+use base64::prelude::*;
+use clap::Parser;
 use encoding_rs::Encoding;
 use encoding_rs::WINDOWS_1252;
+use quoted_printable::ParseMode;
+use regex::{Regex, Captures};
+use std::{fs};
+use std::path::{Path, PathBuf};
+use tokio;
 
 #[allow(dead_code)]
 fn latin1_to_string(s: &[u8]) -> String {
@@ -98,7 +99,7 @@ fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<St
 }
 
 fn parse_subject(line: &str) -> Result<String> {
-    let (_, subject) = line.split_at("Subject:".len());
+    let subject = line.trim_start_matches("Subject:");
 
     let re = Regex::new(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=")?;
 
@@ -124,7 +125,7 @@ fn parse_subject(line: &str) -> Result<String> {
     return Ok(output.into_owned());
 }
 
-async fn parse_file(path: &std::path::PathBuf) -> Result<String> {
+async fn parse_file(path: &Path) -> Result<String> {
     let contents = fs::read_to_string(path)?;
 
     let mut subject_lines: Vec<&str> = Vec::new();
@@ -164,26 +165,41 @@ fn find_files(path: &PathBuf) -> Vec<PathBuf> {
     return paths
 }
 
+/// View emails in a maildir
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    // Color of From header
+    #[arg(short, long, default_value = "cyan")]
+    from_color: String,
+
+    /// Color of mailbox name
+    #[arg(short, long, default_value = "magenta")]
+    mailbox_color: String,
+
+    /// Number of times to greet
+    #[arg(short, long, default_value = "light cyan")]
+    subject_color: String,
+
+    /// maildir directories
+    inputs: Vec<String>,
+}
+
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 {
-        eprintln!("Usage: {} <maildir directory> [<maildir directory> ..]", args[0]);
-        return ();
-    }
+    let args = Args::parse();
 
     let mut handles = Vec::new();
     let mut paths = Vec::new();
 
-    for path in args[1..].iter() {
-        let mut cur_path = PathBuf::from(path);
+    for path in args.inputs {
+        let mut cur_path = PathBuf::from(&path);
         cur_path.push("cur");
         if cur_path.exists() {
             paths.push(cur_path);
         }
 
-        let mut new_path = PathBuf::from(path);
+        let mut new_path = PathBuf::from(&path);
         new_path.push("new");
         if new_path.exists() {
             paths.push(new_path);
@@ -191,15 +207,23 @@ async fn main() {
     }
 
     for path in paths {
-        let files = find_files(&path);
+        let basename = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|p| p.to_str())
+            .unwrap_or_else(|| path.to_str().unwrap());
+
+            let files = find_files(&path);
     
         for file in files {
+                let file = file.clone();
+                let basename = basename.to_string();
                 let handle = tokio::spawn(async move {
                     let content = parse_file(&file).await;
 
                     return match content {
-                        Ok(s) => s,
-                        Err(_) => "<No subject>".to_string(),
+                        Ok(s) => format!("{}: {}", basename, s),
+                        Err(_) => format!("{}: <No subject>", basename),
                    };
                 });
     
@@ -211,7 +235,7 @@ async fn main() {
         let content = handle.await;
 
         match content {
-                Ok(line) => println!("new: {}", line),
+                Ok(line) => println!("{}", line),
                 Err(err) => eprintln!("failed with {}", err),
         };
     }
