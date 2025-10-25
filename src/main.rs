@@ -1,16 +1,16 @@
-use anyhow::{Result, Context, anyhow};
+use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
 use clap::Parser;
 use colored::*;
 use encoding_rs::Encoding;
 use quoted_printable::ParseMode;
-use regex::{Captures};
-use std::collections::HashMap;
+use regex::Captures;
+use regex_macro::regex;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
-use std::{fs};
 use std::path::{Path, PathBuf};
-use regex_macro::regex;
 
 fn decode_charset_crate(charset: &str, encoded_text: &Vec<u8>) -> Result<String> {
     let encoder = match Encoding::for_label(charset.to_ascii_lowercase().as_bytes()) {
@@ -35,7 +35,7 @@ fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<St
         "B" => decode_base64(data),
         v @ _ => Err(anyhow!("Unknown encoding type, {}", v)),
     };
-    
+
     match decoded {
         Ok(v) => decode_charset_crate(charset, &v),
         Err(e) => Err(e),
@@ -60,15 +60,15 @@ fn parse_header_line(header: &str) -> Result<String> {
             Err(e) => {
                 eprintln!("Encoding error: {}", e);
                 caps.get(0).map_or("", |m| m.as_str()).to_string()
-            },
+            }
         }
     });
 
     return Ok(output.into_owned());
 }
 
-fn read_headers(path: &Path) -> Result<HashMap<String, String>> {
-    let mut map= HashMap::new();
+fn read_headers(path: &Path, wanted: &HashSet<&str>) -> Result<HashMap<String, String>> {
+    let mut map = HashMap::new();
 
     let file = File::open(path)?;
     let reader = BufReader::new(file);
@@ -89,18 +89,18 @@ fn read_headers(path: &Path) -> Result<HashMap<String, String>> {
         }
 
         if let Some((header, rest)) = line.split_once(":") {
-            if !header_value.is_empty() {
+            if !header_value.is_empty() && wanted.contains(header_name.as_str()) {
                 if let Ok(s) = parse_header_line(&header_value) {
                     map.insert(header_name, s);
                 }
             }
 
-            header_name = header.to_string();
-            header_value = rest.to_string();
+            header_name = header.trim().to_ascii_lowercase();
+            header_value = rest.trim_start().to_string();
         }
     }
 
-    if !header_value.is_empty() {
+    if !header_value.is_empty() && wanted.contains(header_name.as_str()) {
         if let Ok(s) = parse_header_line(&header_value) {
             map.insert(header_name, s);
         }
@@ -120,7 +120,7 @@ fn find_files(path: &PathBuf) -> Vec<PathBuf> {
         }
     }
 
-    return paths
+    return paths;
 }
 
 /// View emails in a maildir
@@ -189,20 +189,32 @@ fn list_colors() {
     }
 }
 
+fn format_header(
+    map: &HashMap<String, String>,
+    header: &str,
+    fallback: &str,
+    color: Color,
+) -> ColoredString {
+    map.get(header)
+        .map(|s| s.as_str())
+        .unwrap_or(fallback)
+        .color(color)
+}
+
 fn main() {
     let args = Args::parse();
 
     if args.list_colors {
         list_colors();
 
-        return ()
+        return ();
     }
 
     colored::control::set_override(true);
 
     let mailbox_color = parse_color(&args.mailbox_color).unwrap_or(Color::Magenta);
     let subject_color = parse_color(&args.subject_color).unwrap_or(Color::BrightCyan);
-    let from_color = parse_color(&args.from_color).unwrap_or(Color::Cyan);
+    let from_color: Color = parse_color(&args.from_color).unwrap_or(Color::Cyan);
 
     let mut paths = Vec::new();
 
@@ -220,34 +232,38 @@ fn main() {
         }
     }
 
+    let wanted: HashSet<&str> = ["subject", "from"].into_iter().collect();
+
+    let stdout = io::stdout();
+    let mut out = io::BufWriter::new(stdout.lock());
+
     for path in paths {
         let basename = path
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|p| p.to_str())
-            .unwrap_or_else(|| path.to_str().unwrap());
+            .unwrap_or_else(|| path.to_str().unwrap())
+            .to_string();
 
         let files = find_files(&path);
-    
+
         for file in files {
-            let file = file.clone();
-            let basename = basename.to_string();
-            let headers = read_headers(&file);
+            let headers = read_headers(&file, &wanted);
 
             match headers {
                 Ok(map) => {
                     let mailbox = basename.color(mailbox_color);
-                    let from = map.get("From").unwrap_or(&"no from".to_string()).color(from_color);
-                    let subject = map.get("Subject").unwrap_or(&"no subject".to_string()).color(subject_color);
+                    let from = format_header(&map, "from", "no from", from_color);
+                    let subject = format_header(&map, "subject", "no subject", subject_color);
 
-                    if io::stdout().write_fmt(format_args!("{}: {} / {}\n", mailbox, from, subject)).is_err() {
+                    if writeln!(out, "{}: {} / {}", mailbox, from, subject).is_err() {
                         break;
                     }
-                },
+                }
                 Err(e) => {
-                    if io::stdout().write_fmt(format_args!("{}: <No subject> ({})\n", basename, e)).is_err() {
+                    if writeln!(out, "{}: <No subject> ({})", basename, e).is_err() {
                         break;
-                    }
+                    };
                 }
             };
         }
