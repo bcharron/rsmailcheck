@@ -3,7 +3,6 @@ use base64::prelude::*;
 use clap::Parser;
 use colored::*;
 use encoding_rs::Encoding;
-use encoding_rs::WINDOWS_1252;
 use quoted_printable::ParseMode;
 use regex::{Regex, Captures};
 use tokio::fs::File;
@@ -14,11 +13,6 @@ use std::{fs};
 use std::path::{Path, PathBuf};
 use tokio;
 
-#[allow(dead_code)]
-fn latin1_to_string(s: &[u8]) -> String {
-    s.iter().map(|&c| c as char).collect()
-}
-
 fn decode_charset_crate(charset: &str, encoded_text: &Vec<u8>) -> Result<String> {
     let encoder = match Encoding::for_label(charset.to_ascii_lowercase().as_bytes()) {
         Some(encoder) => encoder,
@@ -28,60 +22,6 @@ fn decode_charset_crate(charset: &str, encoded_text: &Vec<u8>) -> Result<String>
     let (s, _encoding_used, _malformed) = encoder.decode(&encoded_text);
 
     let out = s.replace("_", " ");
-
-    return Ok(out);
-}
-
-#[allow(dead_code)]
-fn decode_charset(charset: &str, encoded_text: &Vec<u8>) -> Result<String> {
-    let out = match charset.to_ascii_uppercase().as_str() {
-        "UTF-8" => String::from_utf8(encoded_text.to_vec())?,
-        "ISO-8859-1" => latin1_to_string(encoded_text).to_string(),
-        // "WINDOWS-1252" => latin1_to_string(encoded_text).to_string(),
-        "WINDOWS-1252" => {
-            let (s1, _encoding_used, _malformed) = WINDOWS_1252.decode(encoded_text);
-            s1.into_owned()
-        },
-        _ => return Err(anyhow!("Could not convert unknown charset {}", charset)),
-    };
-
-    let r = out.replace("_", " ");
-
-    return Ok(r);
-}
-
-#[allow(dead_code)]
-fn decode_quoted<'a>(encoded_text: &'a str) -> Result<Vec<u8>> {
-    let bytes = encoded_text.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-
-    let mut x = 0;
-    while x < (bytes.len() - 2) {
-        let c = match bytes[x] {
-            b'=' => {
-                let s = str::from_utf8(&bytes[x+1..x+3]);
-
-                if s.is_ok() {
-                    match u8::from_str_radix(s.unwrap(), 16) {
-                        Ok(i) => { x += 2; i },
-                        Err(_) => b'=',
-                    }
-                } else {
-                    b'='
-                }
-            }
-            c @ _ => c,
-        };
-
-        out.push(c);
-
-        x += 1;
-    }
-
-    while x < bytes.len() {
-        out.push(bytes[x]);
-        x += 1;
-    }
 
     return Ok(out);
 }
@@ -103,7 +43,7 @@ fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<St
     }
 }
 
-fn parse_header(header: &str) -> Result<String> {
+fn parse_header_line(header: &str) -> Result<String> {
     let re = Regex::new(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=")?;
 
     let output = re.replace_all(header.trim_start(), |caps: &Captures| {
@@ -128,68 +68,44 @@ fn parse_header(header: &str) -> Result<String> {
     return Ok(output.into_owned());
 }
 
-#[derive(Debug)]
-struct MailInfo {
-    from: Option<String>,
-    subject: Option<String>,
-}
+async fn read_headers(path: &Path) -> Result<HashMap<String, String>> {
+    let mut map: HashMap<String,String> = HashMap::new();
 
-async fn parse_file_2(path: &Path) -> Result<MailInfo> {
-    let f = File::open(path).await;
-    
-    if let Ok(file) = f {
-        let mut reader = BufReader::new(file);
-        let mut buf = String::with_capacity(1024);
-        let r = reader.read_line(&mut buf).await;
-    }
+    let file = File::open(path).await?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
 
-    return Ok(MailInfo { from: None, subject: None });
-}
-
-async fn parse_file(path: &Path) -> Result<MailInfo> {
-    let contents = fs::read_to_string(path)?;
-
-    let mut subject_lines: Vec<&str> = Vec::new();
-    let mut lines = contents.lines().peekable();
-    let mut subject = None;
-    let mut from = None;
-    
-    while let Some(line) = lines.next() {
-        if line.starts_with("Subject:") {
-            subject_lines.push(&line);
-            
-            while let Some(&next_line) = lines.peek() {
-                if next_line.starts_with(" ") {
-                    subject_lines.push(lines.next().unwrap());
-                } else {
-                    break;
+    let mut last_header = String::new();
+    let mut cur = String::new();
+    while let Ok(Some(line)) = lines.next_line().await {
+        if line == "" {
+            if cur.len() > 0 {
+                if let Ok(s) = parse_header_line(&cur) {
+                    map.insert(String::from(last_header), s);
                 }
             }
-            
-            let s = subject_lines.concat();
-            subject = match parse_header(s.trim_start_matches("Subject:")) {
-                Ok(s) => Some(s),
-                Err(e) => Some(e.to_string()),
-            };
-        } else if line.starts_with("From:") {
-            from = match parse_header(line.trim_start_matches("From:")) {
-                Ok(s) => Some(s),
-                Err(e) => Some(e.to_string()),
-            };
-        }
 
-        // We're done, stop reading.
-        if from.is_some() && subject.is_some() {
             break;
         }
-    }
-    
-    return Ok(MailInfo {
-        from,
-        subject,
-    });
 
-    // return Err(anyhow!("No Subject line in {:?}", path));
+        if line.starts_with(" ") {
+            cur.push_str(&line);
+            continue;
+        }
+
+        if let Some((header, rest)) = String::from(line).split_once(":") {
+            if cur.len() > 0 {
+                if let Ok(s) = parse_header_line(&cur) {
+                    map.insert(String::from(last_header), s);
+                }
+            }
+
+            last_header = String::from(header);
+            cur = String::from(rest);
+        }
+    }
+
+    return Ok(map);
 }
 
 fn find_files(path: &PathBuf) -> Vec<PathBuf> {
@@ -316,13 +232,15 @@ async fn main() {
             let file = file.clone();
             let basename = basename.to_string();
             let handle = tokio::spawn(async move {
-                let content = parse_file(&file).await;
+                let headers = read_headers(&file).await;
+                // println!("headers: {:?}", headers);
+                // let content = parse_file(&file).await;
 
-                return match content {
-                    Ok(m) => {
+                return match headers {
+                    Ok(map) => {
                         let mailbox = basename.color(mailbox_color);
-                        let from = m.from.unwrap_or("no from".to_string()).color(from_color);
-                        let subject = m.subject.unwrap_or("no subject".to_string()).color(subject_color);
+                        let from = map.get("From").unwrap_or(&"no from".to_string()).color(from_color);
+                        let subject = map.get("Subject").unwrap_or(&"no subject".to_string()).color(subject_color);
 
                         format!("{}: {} / {}", mailbox, from, subject)
                     },
