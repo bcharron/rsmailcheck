@@ -5,12 +5,14 @@ use colored::*;
 use encoding_rs::Encoding;
 use quoted_printable::ParseMode;
 use regex::Captures;
-use regex_macro::regex;
+use regex_macro::{regex, LazyRegex};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+
+static ENCODING_REGEX: &LazyRegex = regex!(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=");
 
 fn decode_charset_crate(charset: &str, encoded_text: &Vec<u8>) -> Result<String> {
     let encoder = match Encoding::for_label(charset.to_ascii_lowercase().as_bytes()) {
@@ -42,29 +44,27 @@ fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<St
     }
 }
 
-fn parse_header_line(header: &str) -> Result<String> {
-    let re = regex!(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=");
-
-    let output = re.replace_all(header.trim_start(), |caps: &Captures| {
+fn parse_header_value(header: &str) -> Result<String> {
+    let output = ENCODING_REGEX.replace_all(header, |caps: &Captures| {
         let (Some(charset), Some(encoding), Some(encoded_text)) = (
             caps.get(1).map(|m| m.as_str()),
             caps.get(2).map(|m| m.as_str()),
             caps.get(3).map(|m| m.as_str()),
         ) else {
             // If any part is missing, return the original match unmodified
-            return caps.get(0).map_or("", |m| m.as_str()).to_string();
+            return caps[0].to_string();
         };
 
         match parse_encoding(charset, encoding, encoded_text) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Encoding error: {}", e);
-                caps.get(0).map_or("", |m| m.as_str()).to_string()
+                caps[0].to_string()
             }
         }
     });
 
-    return Ok(output.into_owned());
+    Ok(output.trim().to_owned())
 }
 
 fn read_headers(path: &Path, wanted: &HashSet<&str>) -> Result<HashMap<String, String>> {
@@ -90,7 +90,7 @@ fn read_headers(path: &Path, wanted: &HashSet<&str>) -> Result<HashMap<String, S
 
         if let Some((header, rest)) = line.split_once(":") {
             if !header_value.is_empty() && wanted.contains(header_name.as_str()) {
-                if let Ok(s) = parse_header_line(&header_value) {
+                if let Ok(s) = parse_header_value(&header_value) {
                     map.insert(header_name, s);
                 }
             }
@@ -101,7 +101,7 @@ fn read_headers(path: &Path, wanted: &HashSet<&str>) -> Result<HashMap<String, S
     }
 
     if !header_value.is_empty() && wanted.contains(header_name.as_str()) {
-        if let Ok(s) = parse_header_line(&header_value) {
+        if let Ok(s) = parse_header_value(&header_value) {
             map.insert(header_name, s);
         }
     }
