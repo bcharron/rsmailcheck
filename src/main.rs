@@ -7,7 +7,7 @@ use quoted_printable::ParseMode;
 use regex::{Captures};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::{fs};
 use std::path::{Path, PathBuf};
 use regex_macro::regex;
@@ -196,6 +196,8 @@ fn main() {
         return ()
     }
 
+    colored::control::set_override(true);
+
     let mailbox_color = parse_color(&args.mailbox_color).unwrap_or(Color::Magenta);
     let subject_color = parse_color(&args.subject_color).unwrap_or(Color::BrightCyan);
     let from_color = parse_color(&args.from_color).unwrap_or(Color::Cyan);
@@ -236,10 +238,14 @@ fn main() {
                     let from = map.get("From").unwrap_or(&"no from".to_string()).color(from_color);
                     let subject = map.get("Subject").unwrap_or(&"no subject".to_string()).color(subject_color);
 
-                    println!("{}: {} / {}", mailbox, from, subject);
+                    if io::stdout().write_fmt(format_args!("{}: {} / {}\n", mailbox, from, subject)).is_err() {
+                        break;
+                    }
                 },
                 Err(e) => {
-                    println!("{}: <No subject> ({})", basename, e);
+                    if io::stdout().write_fmt(format_args!("{}: <No subject> ({})\n", basename, e)).is_err() {
+                        break;
+                    }
                 }
             };
         }
