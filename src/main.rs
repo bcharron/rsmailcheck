@@ -88,7 +88,7 @@ fn read_headers(path: &Path) -> Result<HashMap<String, String>> {
         }
 
         if line.starts_with(" ") {
-            cur.push_str(&line);
+            cur.push_str(&line[1..]);
             continue;
         }
 
