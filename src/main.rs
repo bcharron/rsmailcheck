@@ -257,6 +257,7 @@ fn main() {
                     let subject = format_header(&map, "subject", "no subject", subject_color);
 
                     if writeln!(out, "{}: {} / {}", mailbox, from, subject).is_err() {
+                        // Most likely piped to something like `head`, stop parsing.
                         break;
                     }
                 }
