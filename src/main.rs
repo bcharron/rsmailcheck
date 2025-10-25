@@ -4,14 +4,13 @@ use clap::Parser;
 use colored::*;
 use encoding_rs::Encoding;
 use quoted_printable::ParseMode;
-use regex::{Regex, Captures};
-use tokio::fs::File;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
+use regex::{Captures};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::{fs};
 use std::path::{Path, PathBuf};
-use tokio;
+use regex_macro::regex;
 
 fn decode_charset_crate(charset: &str, encoded_text: &Vec<u8>) -> Result<String> {
     let encoder = match Encoding::for_label(charset.to_ascii_lowercase().as_bytes()) {
@@ -44,7 +43,7 @@ fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<St
 }
 
 fn parse_header_line(header: &str) -> Result<String> {
-    let re = Regex::new(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=")?;
+    let re = regex!(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=");
 
     let output = re.replace_all(header.trim_start(), |caps: &Captures| {
         let (Some(charset), Some(encoding), Some(encoded_text)) = (
@@ -68,16 +67,16 @@ fn parse_header_line(header: &str) -> Result<String> {
     return Ok(output.into_owned());
 }
 
-async fn read_headers(path: &Path) -> Result<HashMap<String, String>> {
+fn read_headers(path: &Path) -> Result<HashMap<String, String>> {
     let mut map: HashMap<String,String> = HashMap::new();
 
-    let file = File::open(path).await?;
+    let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
     let mut last_header = String::new();
     let mut cur = String::new();
-    while let Ok(Some(line)) = lines.next_line().await {
+    while let Some(Ok(line)) = lines.next() {
         if line == "" {
             if cur.len() > 0 {
                 if let Ok(s) = parse_header_line(&cur) {
@@ -188,8 +187,7 @@ fn list_colors() {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = Args::parse();
 
     if args.list_colors {
@@ -202,7 +200,6 @@ async fn main() {
     let subject_color = parse_color(&args.subject_color).unwrap_or(Color::BrightCyan);
     let from_color = parse_color(&args.from_color).unwrap_or(Color::Cyan);
 
-    let mut handles = Vec::new();
     let mut paths = Vec::new();
 
     for path in args.inputs {
@@ -231,33 +228,20 @@ async fn main() {
         for file in files {
             let file = file.clone();
             let basename = basename.to_string();
-            let handle = tokio::spawn(async move {
-                let headers = read_headers(&file).await;
-                // println!("headers: {:?}", headers);
-                // let content = parse_file(&file).await;
+            let headers = read_headers(&file);
 
-                return match headers {
-                    Ok(map) => {
-                        let mailbox = basename.color(mailbox_color);
-                        let from = map.get("From").unwrap_or(&"no from".to_string()).color(from_color);
-                        let subject = map.get("Subject").unwrap_or(&"no subject".to_string()).color(subject_color);
+            match headers {
+                Ok(map) => {
+                    let mailbox = basename.color(mailbox_color);
+                    let from = map.get("From").unwrap_or(&"no from".to_string()).color(from_color);
+                    let subject = map.get("Subject").unwrap_or(&"no subject".to_string()).color(subject_color);
 
-                        format!("{}: {} / {}", mailbox, from, subject)
-                    },
-                    Err(e) => format!("{}: <No subject> ({})", basename, e),
-                };
-            });
-
-            handles.push(handle);
+                    println!("{}: {} / {}", mailbox, from, subject);
+                },
+                Err(e) => {
+                    println!("{}: <No subject> ({})", basename, e);
+                }
+            };
         }
-    }
-
-    for handle in handles {
-        let content = handle.await;
-
-        match content {
-                Ok(line) => println!("{}", line),
-                Err(err) => eprintln!("failed with {}", err),
-        };
     }
 }
