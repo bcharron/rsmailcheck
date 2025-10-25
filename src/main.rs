@@ -68,43 +68,45 @@ fn parse_header_line(header: &str) -> Result<String> {
 }
 
 fn read_headers(path: &Path) -> Result<HashMap<String, String>> {
-    let mut map: HashMap<String,String> = HashMap::new();
+    let mut map= HashMap::new();
 
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let mut lines = reader.lines();
 
-    let mut last_header = String::new();
-    let mut cur = String::new();
-    while let Some(Ok(line)) = lines.next() {
-        if line == "" {
-            if cur.len() > 0 {
-                if let Ok(s) = parse_header_line(&cur) {
-                    map.insert(String::from(last_header), s);
-                }
-            }
+    let mut header_name = String::new();
+    let mut header_value = String::new();
 
+    for line_result in reader.lines() {
+        let line = line_result?;
+
+        if line.is_empty() {
             break;
         }
 
-        if line.starts_with(" ") {
-            cur.push_str(&line[1..]);
+        if line.starts_with(char::is_whitespace) {
+            header_value.push_str(line.trim_start());
             continue;
         }
 
-        if let Some((header, rest)) = String::from(line).split_once(":") {
-            if cur.len() > 0 {
-                if let Ok(s) = parse_header_line(&cur) {
-                    map.insert(String::from(last_header), s);
+        if let Some((header, rest)) = line.split_once(":") {
+            if !header_value.is_empty() {
+                if let Ok(s) = parse_header_line(&header_value) {
+                    map.insert(header_name, s);
                 }
             }
 
-            last_header = String::from(header);
-            cur = String::from(rest);
+            header_name = header.to_string();
+            header_value = rest.to_string();
         }
     }
 
-    return Ok(map);
+    if !header_value.is_empty() {
+        if let Ok(s) = parse_header_line(&header_value) {
+            map.insert(header_name, s);
+        }
+    }
+
+    Ok(map)
 }
 
 fn find_files(path: &PathBuf) -> Vec<PathBuf> {
