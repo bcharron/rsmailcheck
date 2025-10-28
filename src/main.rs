@@ -14,6 +14,48 @@ use std::path::{Path, PathBuf};
 
 static ENCODING_REGEX: &LazyRegex = regex!(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=");
 
+// 1753672146.M196918P2035611V000000000000FD00I0000000001C4A91A_0.butch,S=90810:2,Si
+static FILENAME_REGEX: &LazyRegex = regex!(r".*,S=[0-9]+:2,(.*)");
+
+#[derive(Default)]
+struct MaildirInfoFlags {
+    seen: bool,
+    replied: bool,
+    flagged: bool,
+    trashed: bool,
+    draft: bool,
+    internal: bool,
+}
+
+impl MaildirInfoFlags {
+    fn is_new(&self) -> bool {
+        return !(self.seen || self.replied || self.flagged || self.trashed);
+    }
+}
+
+fn decode_flags(filename: &str) -> MaildirInfoFlags {
+    let flags = FILENAME_REGEX
+        .captures(filename)
+        .and_then(|caps| caps.get(1))
+        .map_or("", |m| m.as_str());
+
+    let mut out = MaildirInfoFlags::default();
+
+    for c in flags.chars() {
+        match c {
+            'S' => out.seen = true,
+            'R' => out.replied = true,
+            'F' => out.flagged = true,
+            'T' => out.trashed = true,
+            'D' => out.draft = true,
+            'i' => out.internal = true,
+            _ => {}
+        }
+    }
+
+    out
+}
+
 fn decode_charset_crate(charset: &str, encoded_text: &Vec<u8>) -> Result<String> {
     let encoder = match Encoding::for_label(charset.to_ascii_lowercase().as_bytes()) {
         Some(encoder) => encoder,
@@ -219,16 +261,12 @@ fn main() {
     let mut paths = Vec::new();
 
     for path in args.inputs {
-        let mut cur_path = PathBuf::from(&path);
-        cur_path.push("cur");
-        if cur_path.exists() {
-            paths.push(cur_path);
-        }
-
-        let mut new_path = PathBuf::from(&path);
-        new_path.push("new");
-        if new_path.exists() {
-            paths.push(new_path);
+        for p in ["cur", "new"] {
+            let mut dir_path = PathBuf::from(&path);
+            dir_path.push(p);
+            if dir_path.exists() {
+                paths.push(dir_path);
+            }
         }
     }
 
@@ -248,6 +286,15 @@ fn main() {
         let files = find_files(&path);
 
         for file in files {
+            let flags = file
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(decode_flags);
+
+            if flags.is_some_and(|f| !f.is_new()) {
+                continue;
+            }
+
             let headers = read_headers(&file, &wanted);
 
             match headers {
