@@ -5,7 +5,7 @@ use colored::*;
 use encoding_rs::Encoding;
 use quoted_printable::ParseMode;
 use regex::Captures;
-use regex_macro::{regex, LazyRegex};
+use regex_macro::{LazyRegex, regex};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 static ENCODING_REGEX: &LazyRegex = regex!(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=");
 
 // 1753672146.M196918P2035611V000000000000FD00I0000000001C4A91A_0.butch,S=90810:2,Si
-static FILENAME_REGEX: &LazyRegex = regex!(r".*,S=[0-9]+:2,(.*)");
+static FILENAME_REGEX: &LazyRegex = regex!(r":2,(.*)");
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct MaildirInfoFlags {
     seen: bool,
     replied: bool,
@@ -286,10 +286,7 @@ fn main() {
         let files = find_files(&path);
 
         for file in files {
-            let flags = file
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(decode_flags);
+            let flags = file.file_name().and_then(|s| s.to_str()).map(decode_flags);
 
             if flags.is_some_and(|f| !f.is_new()) {
                 continue;
