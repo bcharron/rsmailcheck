@@ -64,9 +64,7 @@ fn decode_charset_crate(charset: &str, encoded_text: &Vec<u8>) -> Result<String>
 
     let (s, _encoding_used, _malformed) = encoder.decode(&encoded_text);
 
-    let out = s.replace("_", " ");
-
-    return Ok(out);
+    return Ok(s.into_owned());
 }
 
 fn decode_base64<'a>(data: &'a str) -> Result<Vec<u8>> {
@@ -75,7 +73,8 @@ fn decode_base64<'a>(data: &'a str) -> Result<Vec<u8>> {
 
 fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<String> {
     let decoded = match encoding.to_ascii_uppercase().as_str() {
-        "Q" => quoted_printable::decode(data, ParseMode::Robust).context("Decoding failed"),
+        "Q" => quoted_printable::decode(data.replace("_", " "), ParseMode::Robust)
+            .context("Decoding failed"),
         "B" => decode_base64(data),
         v @ _ => Err(anyhow!("Unknown encoding type, {}", v)),
     };
