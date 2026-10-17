@@ -17,6 +17,9 @@ static ENCODING_REGEX: &LazyRegex = regex!(r"=\?([^?]+)\?([^?]+)\?(.*?)\?=");
 // 1753672146.M196918P2035611V000000000000FD00I0000000001C4A91A_0.butch,S=90810:2,Si
 static FILENAME_REGEX: &LazyRegex = regex!(r":2,(.*)");
 
+// Regex to remove spaces between encoded parts
+static ENCODED_SPACE_REGEX: &LazyRegex = regex!(r"\?=\s+=\?");
+
 #[derive(Default, Debug)]
 struct MaildirInfoFlags {
     seen: bool,
@@ -85,8 +88,14 @@ fn parse_encoding<'a>(charset: &str, encoding: &str, data: &'a str) -> Result<St
     }
 }
 
+// On folded lines, spaces between encoded parts get removed, but not in plain text
+fn collapse_folded_line(s: &str) -> String {
+    return ENCODED_SPACE_REGEX.replace_all(s, "?==?").into_owned();
+}
+
 fn parse_header_value(header: &str) -> Result<String> {
-    let output = ENCODING_REGEX.replace_all(header, |caps: &Captures| {
+    let unfolded_line = collapse_folded_line(header);
+    let output = ENCODING_REGEX.replace_all(&unfolded_line, |caps: &Captures| {
         let (Some(charset), Some(encoding), Some(encoded_text)) = (
             caps.get(1).map(|m| m.as_str()),
             caps.get(2).map(|m| m.as_str()),
@@ -125,7 +134,7 @@ fn read_headers(path: &Path, wanted: &HashSet<&str>) -> Result<HashMap<String, S
         }
 
         if line.starts_with(char::is_whitespace) {
-            header_value.push_str(line.trim_start());
+            header_value.push_str(&line);
             continue;
         }
 
